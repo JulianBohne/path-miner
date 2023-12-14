@@ -1,6 +1,8 @@
+#![allow(dead_code, unused_variables)] 
+
 // use raylib::prelude::*;
 use anyhow::{ Result, ensure };
-use std::{io::{Read, Seek, SeekFrom}, fs::File, slice::Iter, fmt};
+use std::{io::{Read, Seek, SeekFrom}, fs::File, slice::Iter, fmt, collections::HashMap};
 use flate2::bufread::ZlibDecoder;
 
 fn chunk_loc_to_byte_offset(bytes: [u8; 4]) -> Option<u64> {
@@ -282,6 +284,169 @@ enum TagPayload {
     LongArray(Vec<i64>),
 }
 
+trait GetPayloadByName {
+    fn get_by_name(&mut self, name: &str) -> &mut TagPayload;
+}
+
+impl GetPayloadByName for Vec<Tag> {
+    fn get_by_name(&mut self, name: &str) -> &mut TagPayload {
+        for item in self {
+            if item.name == name {
+                return &mut item.payload;
+            }
+        }
+        panic!("NBT format error");
+    }
+}
+
+impl TagPayload {
+    fn as_byte(&mut self) -> &mut i8 {
+        if let TagPayload::Byte(b) = self {
+            b
+        } else {
+            panic!("NBT format error");
+        }
+    }
+
+    fn as_short(&mut self) -> &mut i16 {
+        if let TagPayload::Short(s) = self {
+            s
+        } else {
+            panic!("NBT format error");
+        }
+    }
+
+    fn as_int(&mut self) -> &mut i32 {
+        if let TagPayload::Int(i) = self {
+            i
+        } else {
+            panic!("NBT format error");
+        }
+    }
+
+    fn as_long(&mut self) -> &mut i64 {
+        if let TagPayload::Long(l) = self {
+            l
+        } else {
+            panic!("NBT format error");
+        }
+    }
+
+    fn as_float(&mut self) -> &mut f32 {
+        if let TagPayload::Float(f) = self {
+            f
+        } else {
+            panic!("NBT format error");
+        }
+    }
+
+    fn as_double(&mut self) -> &mut f64 {
+        if let TagPayload::Double(d) = self {
+            d
+        } else {
+            panic!("NBT format error");
+        }
+    }
+
+    fn as_byte_array(&mut self) -> &mut Vec<i8> {
+        if let TagPayload::ByteArray(ba) = self {
+            ba
+        } else {
+            panic!("NBT format error");
+        }
+    }
+
+    fn as_string(&mut self) -> &mut String {
+        if let TagPayload::String(s) = self {
+            s
+        } else {
+            panic!("NBT format error");
+        }
+    }
+
+    fn as_list(&mut self) -> &mut Vec<TagPayload> {
+        if let TagPayload::List(list) = self {
+            list
+        } else {
+            panic!("NBT format error");
+        }
+    }
+    
+    fn as_compound(&mut self) -> &mut Vec<Tag> {
+        if let TagPayload::Compound(comp) = self {
+            comp
+        } else {
+            panic!("NBT format error");
+        }
+    }
+    
+    fn as_int_array(&mut self) -> &mut Vec<i32> {
+        if let TagPayload::IntArray(ia) = self {
+            ia
+        } else {
+            panic!("NBT format error");
+        }
+    }
+    
+    fn as_long_array(&mut self) -> &mut Vec<i64> {
+        if let TagPayload::LongArray(la) = self {
+            la
+        } else {
+            panic!("NBT format error");
+        }
+    }
+
+}
+
+fn parse_chunks(f: &mut File, chunk_offsets: &Vec<u64>) -> Result<Vec<Tag>> {
+    let mut chunks = Vec::new();
+    let mut buf4: [u8; 4] = [0; 4]; 
+
+    for (i, chunk_offset) in chunk_offsets.iter().enumerate() {
+        f.seek(SeekFrom::Start(*chunk_offset))?;
+
+        f.read_exact(&mut buf4)?;
+        let chunk_length = u32::from_be_bytes(buf4);
+        println!("Chunk {i} has length: {chunk_length}");
+
+        let mut buf1: [u8; 1] = [0; 1]; 
+
+        f.read_exact(&mut buf1)?;
+
+        ensure!(buf1[0] == 2); // Compression type gzip
+
+        let mut chunk_data = vec![0u8; chunk_length as usize];
+        f.read_exact(&mut chunk_data)?;
+
+        let mut decompressed: Vec<u8> = Vec::new();
+
+        ZlibDecoder::new(chunk_data.as_slice()).read_to_end(&mut decompressed)?;
+
+        
+        let mut iterator = decompressed.iter();
+
+        if let Some(root) = Tag::parse(&mut iterator) {
+            chunks.push(root);
+        } else {
+            eprintln!("Could not parse chunk {i} :(");
+        }
+
+    }
+
+    println!("{}/{} chunks parsed successfully", chunks.len(), chunk_offsets.len());
+
+    return Ok(chunks);
+}
+
+struct BlockType {
+    name: String
+}
+
+enum Block {
+    Skip(usize),
+    Type(usize)
+}
+
 fn main() -> Result<()> {
     // let (mut rl, thread) = raylib::init()
     //     .size(640, 480)
@@ -313,38 +478,28 @@ fn main() -> Result<()> {
 
     println!("Chunks: {}", chunk_offsets.len());
 
-    println!("Chunk offset: {}", chunk_offsets[0]);
+    println!("Chunk offset 0: {}", chunk_offsets[0]);
 
-    f.seek(SeekFrom::Start(chunk_offsets[0]))?;
+    let mut chunks = parse_chunks(&mut f, &chunk_offsets)?;
 
-    f.read_exact(&mut buf4)?;
-    let chunk_length = u32::from_be_bytes(buf4);
+    // println!("{}", chunks[0]);
 
-    println!("Chunk 0 has length: {}", chunk_length);
+    let block_type_index: HashMap<String, usize> = HashMap::new();
+    let block_type: Vec<BlockType> = Vec::new();
 
-    let mut buf1: [u8; 1] = [0; 1]; 
+    let sections = chunks[0].payload.as_compound().get_by_name("sections").as_list();
 
-    f.read_exact(&mut buf1)?;
+    for section in sections {
+        println!("\nNew palette:");
+        let palette = section.as_compound().get_by_name("block_states").as_compound().get_by_name("palette").as_list();
 
-    ensure!(buf1[0] == 2);
+        for block in palette {
+            println!("Found: {}", block.as_compound().get_by_name("Name").as_string());
+        }
+    }
+    
 
-    let mut chunk_data = vec![0u8; chunk_length as usize];
-    f.read_exact(&mut chunk_data)?;
-
-    let mut decompressed: Vec<u8> = Vec::new();
-
-    ZlibDecoder::new(chunk_data.as_slice()).read_to_end(&mut decompressed)?;
-
-    println!("{}", decompressed[0]);
-
-    let mut iterator = decompressed.iter();
-
-    let root = Tag::parse(&mut iterator);
-
-    match root {
-        None => println!("No root delivered :("),
-        Some(root) => println!("{}", root)
-    };
+    // println!("Chunk 0 section count: {}", sections.len());
 
     Ok(())
 }
